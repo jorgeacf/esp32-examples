@@ -126,13 +126,13 @@ private:
     Config _config;
     TMC2209Stepper* _driver = nullptr;
 
-    MotorMode _currentMode = MODE_STOPPED;
-    bool _driverEnabled = true;
-    bool _directionForward = true;
+    volatile MotorMode _currentMode = MODE_STOPPED;
+    volatile bool _driverEnabled = true;
+    volatile bool _directionForward = true;
 
-    uint16_t _currentMicrosteps = 16;
-    uint16_t _currentRmsCurrent = 600;
-    uint32_t _stepIntervalMicros = 800;
+    volatile uint16_t _currentMicrosteps = 16;
+    volatile uint16_t _currentRmsCurrent = 600;
+    volatile uint32_t _stepIntervalMicros = 800;
     uint32_t _activeIntervalMicros = 1000; // Acceleration ramp interval
     uint8_t _sgThreshold = 64;
 

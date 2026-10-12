@@ -23,6 +23,10 @@ const unsigned long DEBUG_PRINT_INTERVAL_MS = 3000;
 void processSerialCommand(char cmd);
 void printHelp();
 void printCurrentDebug();
+void backgroundServicesTask(void* pvParameters);
+
+// Task handle for Core 0 Background Services
+TaskHandle_t bgServicesTaskHandle = NULL;
 
 void setup() {
     Serial.begin(115200);
@@ -35,52 +39,91 @@ void setup() {
     // 1. Initialize TMC2209 stepper controller
     stepper.begin();
 
-    // 2. Initialize INA226 voltage and current monitor
+    // 2. Disable Watchdogs on Core 1 (Application CPU) so stepper pulse loop has 100% continuous time
+    disableCore1WDT();
+    disableLoopWDT();
+
+    // 3. Initialize INA226 voltage and current monitor
     powerMonitor.begin();
 
-    // 3. Initialize WiFi network connection
+    // 4. Initialize WiFi network connection
     wifiService.begin();
 
-    // 4. Initialize WebUI dashboard & REST API
+    // 5. Initialize WebUI dashboard & REST API
     webUI.begin();
+
+    // 6. Spawn Background Services Task pinned to Core 0 (PRO_CPU)
+    // Core 0 handles WiFi, WebServer, INA226 I2C, Serial CLI, and telemetry
+    // Core 1 (APP_CPU) is left 100% dedicated to jitter-free stepper pulse generation
+    xTaskCreatePinnedToCore(
+        backgroundServicesTask,
+        "BgServicesCore0",
+        8192,
+        NULL,
+        1,                     // Priority 1 (normal application priority)
+        &bgServicesTaskHandle,
+        0                      // Pin to Core 0 (PRO_CPU)
+    );
+
+    Serial.println(F("\n--------------------------------------------------------"));
+    Serial.println(F("  [ARCHITECTURE] DUAL-CORE MULTIPROCESSING ACTIVATED:    "));
+    Serial.println(F("   - Core 0 (PRO_CPU): WiFi, WebServer, INA226, Serial CLI"));
+    Serial.println(F("   - Core 1 (APP_CPU): 100% Dedicated Stepper Pulse Loop   "));
+    Serial.println(F("--------------------------------------------------------\n"));
 
     printHelp();
 }
 
+/**
+ * @brief Core 0 Background Worker.
+ * Handles all network requests, WebUI polling, I2C telemetry, and Serial I/O.
+ * Yields 1ms per iteration so the underlying ESP32 WiFi stack and IDLE0 run without latency.
+ */
+void backgroundServicesTask(void* pvParameters) {
+    while (true) {
+        // 1. Process serial commands from user
+        while (Serial.available()) {
+            char c = (char)Serial.read();
+            if (c != '\r' && c != '\n') {
+                processSerialCommand(c);
+            }
+        }
+
+        // 2. Maintain WiFi network connection state
+        wifiService.update();
+
+        // 3. Serve WebUI requests
+        webUI.update();
+
+        // 4. Periodic live telemetry stream (if enabled)
+        if (liveTelemetryActive && (millis() - lastTelemetryStreamTime >= TELEMETRY_STREAM_INTERVAL_MS)) {
+            lastTelemetryStreamTime = millis();
+            INA226Monitor::Telemetry t = powerMonitor.read();
+            if (t.valid) {
+                Serial.printf("[PWR] VBUS: %5.2f V | ISHUNT: %6.1f mA | POWER: %5.2f W | %s\n",
+                              t.busVoltage_V, t.current_mA, t.power_W,
+                              stepper.isEnabled() ? "ENABLED" : "DISABLED");
+            }
+        }
+
+        // 5. Periodic 3-second debug print (Coil target vs INA226 DC bus current)
+        if (millis() - lastDebugPrintTime >= DEBUG_PRINT_INTERVAL_MS) {
+            lastDebugPrintTime = millis();
+            printCurrentDebug();
+        }
+
+        // Yield to FreeRTOS on Core 0 so WiFi stack and IDLE0 run smoothly
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
+/**
+ * @brief Arduino loop() runs on Core 1 (APP_CPU).
+ * Exclusively dedicated to stepper motion control.
+ * Zero interference from WiFi packets, WebUI polling, I2C reads, or Serial I/O.
+ */
 void loop() {
-    // 1. Process serial commands from user
-    while (Serial.available()) {
-        char c = (char)Serial.read();
-        if (c != '\r' && c != '\n') {
-            processSerialCommand(c);
-        }
-    }
-
-    // 2. Execute stepper pulse generation
     stepper.update();
-
-    // 3. Maintain WiFi network connection state
-    wifiService.update();
-
-    // 4. Serve WebUI requests
-    webUI.update();
-
-    // 5. Periodic live telemetry stream (if enabled)
-    if (liveTelemetryActive && (millis() - lastTelemetryStreamTime >= TELEMETRY_STREAM_INTERVAL_MS)) {
-        lastTelemetryStreamTime = millis();
-        INA226Monitor::Telemetry t = powerMonitor.read();
-        if (t.valid) {
-            Serial.printf("[PWR] VBUS: %5.2f V | ISHUNT: %6.1f mA | POWER: %5.2f W | %s\n",
-                          t.busVoltage_V, t.current_mA, t.power_W,
-                          stepper.isEnabled() ? "ENABLED" : "DISABLED");
-        }
-    }
-
-    // 6. Periodic 3-second debug print (Coil target vs INA226 DC bus current)
-    if (millis() - lastDebugPrintTime >= DEBUG_PRINT_INTERVAL_MS) {
-        lastDebugPrintTime = millis();
-        printCurrentDebug();
-    }
 }
 
 void processSerialCommand(char cmd) {

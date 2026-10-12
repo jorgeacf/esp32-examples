@@ -88,11 +88,14 @@ uint32_t TMC2209Controller::getStartInterval() const {
     if (totalSteps <= 0.0f) return _stepIntervalMicros;
     // Start gently at ~30 RPM (or target interval if target is even slower)
     uint32_t startUs = (uint32_t)((60.0f * 1000000.0f) / (30.0f * totalSteps));
-    return max(startUs, _stepIntervalMicros);
+    uint32_t targetUs = _stepIntervalMicros;
+    return (startUs > targetUs) ? startUs : targetUs;
 }
 
 void TMC2209Controller::update() {
     if (!_driverEnabled || _currentMode == MODE_STOPPED) {
+        // Sleep 5ms when idle to yield to FreeRTOS and keep CPU cool
+        vTaskDelay(pdMS_TO_TICKS(5));
         return;
     }
 
@@ -128,7 +131,10 @@ void TMC2209Controller::update() {
             case DEMO_FWD:
                 setDirection(true);
                 if (nowMicros - _lastStepTime >= _activeIntervalMicros) {
-                    _lastStepTime = nowMicros;
+                    _lastStepTime += _activeIntervalMicros;
+                    if (nowMicros - _lastStepTime >= _activeIntervalMicros) {
+                        _lastStepTime = nowMicros;
+                    }
                     triggerStepPulse();
                     advanceRamp();
                     _stepCounter++;
@@ -146,13 +152,18 @@ void TMC2209Controller::update() {
                     _demoState = DEMO_REV;
                     _lastStepTime = nowMicros;
                     _activeIntervalMicros = getStartInterval();
+                } else {
+                    vTaskDelay(pdMS_TO_TICKS(2));
                 }
                 break;
 
             case DEMO_REV:
                 setDirection(false);
                 if (nowMicros - _lastStepTime >= _activeIntervalMicros) {
-                    _lastStepTime = nowMicros;
+                    _lastStepTime += _activeIntervalMicros;
+                    if (nowMicros - _lastStepTime >= _activeIntervalMicros) {
+                        _lastStepTime = nowMicros;
+                    }
                     triggerStepPulse();
                     advanceRamp();
                     _stepCounter++;
@@ -170,6 +181,8 @@ void TMC2209Controller::update() {
                     _demoState = DEMO_FWD;
                     _lastStepTime = nowMicros;
                     _activeIntervalMicros = getStartInterval();
+                } else {
+                    vTaskDelay(pdMS_TO_TICKS(2));
                 }
                 break;
         }
@@ -179,7 +192,10 @@ void TMC2209Controller::update() {
     // Target Steps Mode
     if (_currentMode == MODE_TARGET_STEPS) {
         if (nowMicros - _lastStepTime >= _activeIntervalMicros) {
-            _lastStepTime = nowMicros;
+            _lastStepTime += _activeIntervalMicros;
+            if (nowMicros - _lastStepTime >= _activeIntervalMicros) {
+                _lastStepTime = nowMicros;
+            }
             triggerStepPulse();
             advanceRamp();
             _stepCounter++;
@@ -196,7 +212,10 @@ void TMC2209Controller::update() {
     // Continuous Modes
     if (_currentMode == MODE_CONTINUOUS_FWD || _currentMode == MODE_CONTINUOUS_REV) {
         if (nowMicros - _lastStepTime >= _activeIntervalMicros) {
-            _lastStepTime = nowMicros;
+            _lastStepTime += _activeIntervalMicros;
+            if (nowMicros - _lastStepTime >= _activeIntervalMicros) {
+                _lastStepTime = nowMicros;
+            }
             triggerStepPulse();
             advanceRamp();
             _stepCounter++;
