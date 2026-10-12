@@ -17,9 +17,10 @@ bool INA226Monitor::begin() {
 bool INA226Monitor::begin(const Config& config) {
     _config = config;
 
-    // Initialize I2C bus with specified SDA/SCL pins
+    // Initialize I2C bus with specified SDA/SCL pins and safe hardware timeout
     if (_config.wire) {
         _config.wire->begin(_config.sdaPin, _config.sclPin);
+        _config.wire->setTimeOut(25); // 25ms timeout prevents hangs if motor noise glitches bus
     }
 
     if (_sensor) {

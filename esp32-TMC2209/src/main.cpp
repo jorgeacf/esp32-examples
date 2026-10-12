@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <esp_task_wdt.h>
 #include "TMC2209Controller.h"
 #include "INA226Monitor.h"
 #include "WiFiService.h"
@@ -39,9 +40,14 @@ void setup() {
     // 1. Initialize TMC2209 stepper controller
     stepper.begin();
 
-    // 2. Disable Watchdogs on Core 1 (Application CPU) so stepper pulse loop has 100% continuous time
-    disableCore1WDT();
-    disableLoopWDT();
+    // 2. Reconfigure Task Watchdog (TWDT) via official ESP-IDF API:
+    // Only monitor Core 0 IDLE task with generous 15s timeout; Core 1 (stepper) is unmonitored
+    esp_task_wdt_config_t twdt_config = {
+        .timeout_ms = 15000,
+        .idle_core_mask = (1 << 0), // Monitor Core 0 IDLE only
+        .trigger_panic = false
+    };
+    esp_task_wdt_reconfigure(&twdt_config);
 
     // 3. Initialize INA226 voltage and current monitor
     powerMonitor.begin();
@@ -58,7 +64,7 @@ void setup() {
     xTaskCreatePinnedToCore(
         backgroundServicesTask,
         "BgServicesCore0",
-        8192,
+        16384,                 // 16KB stack: ample room for WebServer, JSON, and network buffers
         NULL,
         1,                     // Priority 1 (normal application priority)
         &bgServicesTaskHandle,
@@ -113,7 +119,7 @@ void backgroundServicesTask(void* pvParameters) {
         }
 
         // Yield to FreeRTOS on Core 0 so WiFi stack and IDLE0 run smoothly
-        vTaskDelay(pdMS_TO_TICKS(1));
+        vTaskDelay(pdMS_TO_TICKS(3));
     }
 }
 

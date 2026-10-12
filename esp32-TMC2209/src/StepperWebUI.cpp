@@ -504,16 +504,29 @@ footer {
 
 <script>
 let sliderDebounce = null;
+let isPolling = false;
 
 async function fetchStatus() {
+  if (isPolling) return;
+  isPolling = true;
   try {
-    const res = await fetch('/api/status');
-    if (!res.ok) return;
-    const data = await res.json();
-    renderUI(data);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+    const res = await fetch('/api/status', {
+      signal: controller.signal,
+      cache: 'no-store'
+    });
+    clearTimeout(timeoutId);
+    if (res.ok) {
+      const data = await res.json();
+      renderUI(data);
+    }
   } catch (err) {
-    document.getElementById('badge-status').textContent = 'OFFLINE';
+    document.getElementById('badge-status').textContent = 'RETRYING...';
     document.getElementById('badge-status').parentElement.classList.remove('badge-online');
+  } finally {
+    isPolling = false;
+    setTimeout(fetchStatus, 800);
   }
 }
 
@@ -617,7 +630,14 @@ function renderUI(data) {
 
 async function sendAction(action, extra = '') {
   try {
-    const res = await fetch('/api/control?action=' + action + extra, { method: 'POST' });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+    const res = await fetch('/api/control?action=' + action + extra, {
+      method: 'POST',
+      signal: controller.signal,
+      cache: 'no-store'
+    });
+    clearTimeout(timeoutId);
     if (res.ok) {
       const data = await res.json();
       renderUI(data);
@@ -636,8 +656,7 @@ function onSpeedSlider(val) {
   }, 150);
 }
 
-// Start live polling every 500ms
-setInterval(fetchStatus, 500);
+// Start adaptive self-scheduling polling loop
 fetchStatus();
 </script>
 </body>
@@ -683,6 +702,7 @@ void StepperWebUI::update() {
 }
 
 void StepperWebUI::handleRoot() {
+    _server.sendHeader("Connection", "close");
     _server.send_P(200, "text/html", INDEX_HTML);
 }
 
@@ -777,6 +797,8 @@ void StepperWebUI::handleApiStatus() {
         millis() / 1000
     );
 
+    _server.sendHeader("Connection", "close");
+    _server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     _server.send(200, "application/json", json);
 }
 
@@ -844,5 +866,6 @@ void StepperWebUI::handleApiControl() {
 }
 
 void StepperWebUI::handleNotFound() {
+    _server.sendHeader("Connection", "close");
     _server.send(404, "text/plain", "404: Not Found");
 }
